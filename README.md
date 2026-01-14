@@ -1,6 +1,6 @@
-# smart_pill_box
+# Smart Pill Box
 
-A new Flutter project.
+Smart Pill Box Application built with Flutter.
 
 ## Getting Started
 
