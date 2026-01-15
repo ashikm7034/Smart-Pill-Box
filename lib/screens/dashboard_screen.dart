@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -19,6 +20,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   late Timer _timer;
   DateTime _now = DateTime.now();
   bool _isConnected = false;
+  int _heartRate = 72;
+  final Random _random = Random();
 
   // Initialize in initState to get fresh dates
   List<Map<String, String>> _slotData = [];
@@ -31,6 +34,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (mounted) {
         setState(() {
           _now = DateTime.now();
+          if (timer.tick % 3 == 0) {
+            // Randomize heart rate every 3 seconds
+            _heartRate = 60 + _random.nextInt(40); // 60-100 BPM
+          }
         });
       }
     });
@@ -510,6 +517,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   _buildLegendItem("Missed", const Color(0xFFEF5350)),
                 ],
               ),
+
+              const SizedBox(height: 30),
+              // Heart Rate Monitor (Bottom)
+              _buildHeartRateCard(),
             ],
           ),
         ),
@@ -533,4 +544,111 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ],
     );
   }
+
+  Widget _buildHeartRateCard() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.red.withOpacity(0.1),
+            blurRadius: 15,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFEBEE), // Light Red
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.favorite_rounded,
+              color: Color(0xFFEF5350), // Red
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "Heart Rate",
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey[600],
+                ),
+              ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    "$_heartRate",
+                    style: GoogleFonts.poppins(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF2D3436),
+                      height: 1.0,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Text(
+                      "BPM",
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey[400],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          Spacer(),
+          // Interactive Graph / Waveform placeholder
+          Container(
+            height: 40,
+            width: 80,
+            child: CustomPaint(painter: HeartWavePainter()),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class HeartWavePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFFEF5350).withOpacity(0.5)
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+
+    final path = Path();
+    path.moveTo(0, size.height / 2);
+
+    // Simple mock EKG wave
+    path.lineTo(size.width * 0.2, size.height / 2);
+    path.lineTo(size.width * 0.3, size.height * 0.2);
+    path.lineTo(size.width * 0.4, size.height * 0.8);
+    path.lineTo(size.width * 0.5, size.height * 0.1);
+    path.lineTo(size.width * 0.6, size.height * 0.9);
+    path.lineTo(size.width * 0.7, size.height / 2); // Corrected this line
+    path.lineTo(size.width, size.height / 2);
+
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

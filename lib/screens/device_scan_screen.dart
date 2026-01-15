@@ -303,7 +303,7 @@ class _DeviceScanScreenState extends State<DeviceScanScreen>
                           ),
                           const SizedBox(height: 16),
                           Text(
-                            "No devices found",
+                            "No smart pill device found",
                             style: GoogleFonts.poppins(color: Colors.grey[500]),
                           ),
                           TextButton(
