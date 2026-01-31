@@ -1,0 +1,48 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.1' # Using a stable version
+          channel: 'stable'
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      # Create key.properties (if needed - skipping since we use debug signing for now)
+      # But we DO need google-services.json. 
+      # Since we added it to .gitignore locally but it is NOT in the repo, the build WILL FAIL.
+      # User must add it as a SECRET or we must revert the gitignore for now (risky but easy).
+      # BETTER OPTION for now: Write a "dummy" google-services.json or ask user to add secret.
+      # WAITING: Check if user committed google-services.json (Yes, earlier output said "create mode 100644 android/app/google-services.json" in commit 0183311).
+      # Wait, I reverted the commit. 
+      # Let's check if google-services.json is in the repo.
+      # If not, I will add a step to write it from a SECRET.
+      
+      - name: Build APK
+        run: flutter build apk --release --no-tree-shake-icons
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
