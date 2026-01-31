@@ -1,94 +1,181 @@
-/*
-    Smart Pill Box - ESP32 BLE Server
-    
-    Features:
-    - Creates a BLE Server
-    - Advertises a Service
-    - Listen for incoming messages on a Characteristic
-    - Prints received messages to Serial Monitor
 
-    Service UUID:        4fafc201-1fb5-459e-8fcc-c5c9c331914b
-    Characteristic UUID: beb5483e-36e1-4688-b7f5-ea07361b26a8
-*/
 
-#include <BLEDevice.h>
-#include <BLEUtils.h>
-#include <BLEServer.h>
+#include "EasyBLE.h"
 
-// See the following for generating UUIDs:
-// https://www.uuidgenerator.net/
+EasyBLE ble;
 
-#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#include <EEPROM.h>
+#include "PillEEPROM.h"
+#include "PillFCM.h"
 
-BLECharacteristic *pCharacteristic;
-String receivedMessage = "";
+// ... (Existing Include) ...
 
-class MyCallbacks: public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic *pCharacteristic) {
-      std::string value = pCharacteristic->getValue();
-
-      if (value.length() > 0) {
-        receivedMessage = "";
-        Serial.print("Received Value: ");
-        for (int i = 0; i < value.length(); i++)
-        {
-          Serial.print(value[i]);
-          receivedMessage += value[i];
-        }
-        Serial.println();
-        Serial.println("Saved to variable: " + receivedMessage);
-        
-        // You can process the 'receivedMessage' here
-        // e.g., if (receivedMessage == "TAKE_MED") { rotateMotor(); }
-      }
-    }
-};
-
-class MyServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
-      Serial.println("Device Connected");
-    };
-
-    void onDisconnect(BLEServer* pServer) {
-      Serial.println("Device Disconnected");
-      // Restart advertising so others can connect
-      pServer->getAdvertising()->start();
-      Serial.println("Advertising restarted");
-    }
-};
+PillEEPROM pillMemory; 
+PillFCM fcm;
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Starting BLE work!");
-
-  BLEDevice::init("Smart Pill Box (ESP32)");
-  BLEServer *pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
-
-  BLEService *pService = pServer->createService(SERVICE_UUID);
-
-  pCharacteristic = pService->createCharacteristic(
-                                         CHARACTERISTIC_UUID,
-                                         BLECharacteristic::PROPERTY_READ |
-                                         BLECharacteristic::PROPERTY_WRITE
-                                       );
-
-  pCharacteristic->setCallbacks(new MyCallbacks());
-  pCharacteristic->setValue("Hello World"); // Initial value
-
-  pService->start();
-  // BLEAdvertising *pAdvertising = pServer->getAdvertising();  // this still is working for backward compatibility
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->setScanResponse(true);
-  pAdvertising->setMinPreferred(0x06);  // functions that help with iPhone connections issue
-  pAdvertising->setMinPreferred(0x12);
-  BLEDevice::startAdvertising();
-  Serial.println("Characteristic defined! Now you can read it in your phone!");
+  pillMemory.begin(); // Init EEPROM via Library
+  
+  // Start Bluetooth query
+  ble.begin("Smart Pill Box");
+  
+  // Connect to WiFi for Notifications
+  // REPLACE WITH YOUR WIFI CREDENTIALS IN PRODUCTION
+  // For demo, we assume user will edit this line.
+  fcm.begin("FTTHZ", "qazplm007");
+  
+  Serial.println("Bluetooth started! Waiting for app...");
 }
 
 void loop() {
-  // Main loop logic here
-  delay(2000);
+  // Maintain WiFi
+  fcm.loop();
+  
+  // Check if data is available (just like Serial.available())
+  if (ble.available()) {
+    
+    String data = ble.readString();
+    
+    Serial.print("Received: ");
+    Serial.println(data);
+    
+    // --- YOUR LOGIC HERE ---
+    
+    // 0. Save Slot Data (Command: "SLOT:ID:TIME:DATE")
+    if (data.startsWith("SLOT:")) {
+       // Format: SLOT:1:08:00 AM:Jan 14
+       int firstColon = data.indexOf(':');
+       int secondColon = data.indexOf(':', firstColon + 1);
+       int thirdColon = data.indexOf(':', secondColon + 1);
+       
+       if (firstColon > 0 && secondColon > 0) {
+           String idStr = data.substring(firstColon + 1, secondColon);
+           int id = idStr.toInt();
+           
+           if (id > 0) {
+                String timeStr;
+                String dateStr;
+                
+                if (thirdColon > 0) {
+                    timeStr = data.substring(secondColon + 1, thirdColon);
+                    dateStr = data.substring(thirdColon + 1);
+                } else {
+                    timeStr = data.substring(secondColon + 1);
+                    dateStr = "";
+                }
+                
+                // Use Library (default status = "scheduled")
+                pillMemory.saveSlot(id, timeStr, dateStr);
+           }
+       }
+    }
+    
+    // Command: give_data
+    else if (data == "give_data") {
+        Serial.println("Command: give_data -> Syncing...");
+        for (int i = 1; i <= 15; i++) {
+            String val = pillMemory.readSlot(i); // "08:00 AM|Jan 14|scheduled"
+            if (val.length() > 0) {
+                // Parse Time|Date|Status
+                int firstPipe = val.indexOf('|');
+                int secondPipe = val.indexOf('|', firstPipe + 1);
+                
+                String t = "";
+                String d = "";
+                String st = "scheduled"; // default
+                
+                if (firstPipe > 0) {
+                    t = val.substring(0, firstPipe);
+                    if (secondPipe > 0) {
+                        d = val.substring(firstPipe + 1, secondPipe);
+                        st = val.substring(secondPipe + 1);
+                    } else {
+                        d = val.substring(firstPipe + 1);
+                    }
+                }
+                
+                // Send to App: "SLOT_DATA:ID:TIME:DATE:STATUS"
+                String resp = "SLOT_DATA:" + String(i) + ":" + t + ":" + d + ":" + st;
+                ble.print(resp);
+                Serial.println("Sent: " + resp);
+                delay(50); // Throttle
+            }
+        }
+        ble.print("SYNC_DONE");
+    }
+
+    // 1. Handshake
+    else if (data == "fingerprint") {
+       Serial.println("Handshake -> Sending 'ok'");
+       delay(3000);
+       ble.print("ok");
+       // eth test code ann . eth pole ann send cheyande yellathinum ok send cheytha mathi . 
+    }
+    
+    // 2. Add Fingerprint
+    else if (data.startsWith("add_fp:")) {
+       // data is like "add_fp:1:mom"
+       // You can parse it here
+       Serial.println("Command: Add Fingerprint");
+       // enrollFingerprint(...);
+    }
+    
+    // 3. Delete Fingerprint
+    else if (data.startsWith("FP_DEL:")) {
+       Serial.println("Command: Delete Fingerprint");
+       // deleteFingerprint(...);
+    }
+  }
+  
+  //optional eth ninakk mavuvaly conrol cheyyan vendi ann
+  // 2. Send from Serial -> Send to Phone (Bridge Mode)
+  if (Serial.available()) {
+    String txValue = Serial.readStringUntil('\n');
+    txValue.trim(); // Clean up whitespace
+    
+    // Clear Command
+    if (txValue == "clear") {
+        pillMemory.clear();
+        return;
+    }
+
+    // Print EEPROM Command
+    if (txValue == "eeprom") {
+        pillMemory.printAll();
+        return;
+    }
+    
+    // --- EXAMPLE: Hardware Trigger Simulation ---
+    // If you type "taken:1", it marks Slot 1 as Taken
+    if (txValue.startsWith("taken:")) {
+        int id = txValue.substring(6).toInt();
+        if (id > 0) {
+            pillMemory.updateStatus(id, "taken");
+            // Notify App immediately too?
+            // ble.print("SLOT_UPDATE:" + String(id) + ":taken"); 
+        }
+        return;
+    }
+    
+    if (txValue.startsWith("missed:")) {
+        int id = txValue.substring(7).toInt();
+        if (id > 0) {
+            pillMemory.updateStatus(id, "missed");
+            
+            // --- TRIGGER NOTIFICATION (Demo) ---
+            fcm.sendNotification("MISSED PILL!", "Slot " + String(id) + " was missed! Take it now.");
+        }
+        return;
+    }
+    // --------------------------------------------
+    
+    if (txValue.length() > 0) {
+       ble.print(txValue);
+       Serial.print("Sent to App: ");
+       Serial.println(txValue);
+    }
+  }
+  
+  delay(10); // Small delay for stability
 }

@@ -3,36 +3,139 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
 
+class TurbineController {
+  _TurbineWidgetState? _state;
+
+  void _bind(_TurbineWidgetState state) {
+    _state = state;
+  }
+
+  /// Animates the wheel to position the given slot index [1-15] at the top.
+  Future<void> animateToSlot(int slotIndex) async {
+    if (_state != null) {
+      await _state!._animateToSlot(slotIndex);
+    }
+  }
+}
+
 class TurbineWidget extends StatefulWidget {
   final List<Map<String, String>> slots;
   final Function(int)? onSlotTap;
+  final TurbineController? controller;
 
-  const TurbineWidget({super.key, required this.slots, this.onSlotTap});
+  const TurbineWidget({
+    super.key,
+    required this.slots,
+    this.onSlotTap,
+    this.controller,
+  });
 
   @override
   State<TurbineWidget> createState() => _TurbineWidgetState();
 }
 
 class _TurbineWidgetState extends State<TurbineWidget>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   double _rotationAngle = 0.0;
   int _lastFeedbackIndex = -1;
+  late AnimationController _animController;
+  late Animation<double> _animation;
 
-  // Snap/magnetism effect could be added here later.
+  @override
+  void initState() {
+    super.initState();
+    widget.controller?._bind(this);
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    );
+    _animController.addListener(() {
+      setState(() {
+        _rotationAngle = _animation.value;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _animController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _animateToSlot(int slotIndex) async {
+    // 0-indexed internal, but input is 1-15
+    int targetIndex = slotIndex - 1;
+
+    final int totalSlots = 15;
+    final double anglePerSlot = 2 * pi / totalSlots;
+    final double halfSlot = anglePerSlot / 2;
+
+    // Formula: rotation = -(targetIndex * anglePerSlot + halfSlot)
+    // This aligns the Center of the slot to 0 radians (Right) relative to "rotation".
+    // But we want it at -pi/2 (Top).
+    // Wait, let's re-derive based on Painter logic:
+    // Painter: startAngle = i*angle + rotation - pi/2
+    // CenterAngle = startAngle + halfSlot = i*angle + rotation - pi/2 + halfSlot
+    // We want CenterAngle to be -pi/2 (Top visual)
+    // -pi/2 = i*angle + rotation - pi/2 + halfSlot
+    // 0 = i*angle + rotation + halfSlot
+    // rotation = -(i*angle + halfSlot)
+
+    double targetRot = -(targetIndex * anglePerSlot + halfSlot);
+
+    // Ensure we spin in one direction (Clockwise? Decreasing rotation?).
+    // Make targetRot strictly smaller than currentRot to spin "back" or "forward".
+    // Let's add full rotations to make it look active.
+
+    double currentRot = _rotationAngle;
+
+    // Adjust targetRot to be the closest equivalent less than currentRot
+    while (targetRot > currentRot) {
+      targetRot -= 2 * pi;
+    }
+    // Now targetRot <= currentRot.
+    // If it's too close, add a full spin for effect.
+    if ((currentRot - targetRot).abs() < 0.1) {
+      targetRot -= 2 * pi;
+    }
+
+    // Add intentional full spin? User said "rotate 1 direction".
+    // Let's just ensure it goes to the target.
+    // If it's too far (e.g. > 2 spins), maybe clamp?
+    // No, "Save & Next" implies small steps. "Slot 1" from "Slot 14" is a big spin.
+
+    _animation = Tween<double>(begin: currentRot, end: targetRot).animate(
+      CurvedAnimation(parent: _animController, curve: Curves.easeOutBack),
+    );
+
+    await _animController.forward(from: 0.0);
+
+    setState(() {
+      _rotationAngle = targetRot;
+    });
+  }
 
   int _calculateActiveIndex() {
     final int totalSlots = widget.slots.length; // Should be 15
     final double anglePerSlot = 2 * pi / totalSlots;
+    final double halfSlot = anglePerSlot / 2;
 
     int closestIndex = 0;
     double minDistance = 1000.0;
 
     for (int i = 0; i < totalSlots; i++) {
-      double slotCenterAngle = i * anglePerSlot + _rotationAngle - pi / 2;
-      // Normalize angle difference to [-pi, pi]
-      double diff = (slotCenterAngle - (-pi / 2)) % (2 * pi);
-      if (diff > pi) diff -= 2 * pi;
-      if (diff < -pi) diff += 2 * pi;
+      // Center of the slot in visual terms
+      double slotCenterAngle =
+          i * anglePerSlot + _rotationAngle - pi / 2 + halfSlot;
+
+      // Normalize angle difference to [-pi, pi] relative to Top (-pi/2)
+      // Actually, standardizing checking diff to -pi/2 is tricky with mod.
+      // Easier: Check diff to -pi/2
+
+      double diff = (slotCenterAngle - (-pi / 2));
+      // Normalize diff to -pi..pi
+      while (diff > pi) diff -= 2 * pi;
+      while (diff < -pi) diff += 2 * pi;
 
       if (diff.abs() < minDistance) {
         minDistance = diff.abs();
@@ -137,8 +240,11 @@ class _TurbineWidgetState extends State<TurbineWidget>
               // Fixed Center Hub (Clickable)
               GestureDetector(
                 onTap: () {
+                  // DISABLE click for Slot 15 (Index 14) -> Door
+                  if (activeIndex == 14) return;
+
                   if (widget.onSlotTap != null) {
-                    widget.onSlotTap!(activeIndex);
+                    widget.onSlotTap!(activeIndex + 1);
                   }
                 },
                 child: Container(
@@ -162,6 +268,34 @@ class _TurbineWidgetState extends State<TurbineWidget>
   }
 
   Widget _buildCenterText(int index) {
+    // SPECIAL CASE: Slot 15 is the Door/Opening
+    if (index == 14) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.door_sliding_rounded, size: 32, color: Colors.grey[400]),
+          const SizedBox(height: 4),
+          Text(
+            "DOOR",
+            style: GoogleFonts.poppins(
+              fontSize: 14,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.2,
+            ),
+          ),
+          Text(
+            "OPENING SIDE",
+            style: GoogleFonts.poppins(
+              fontSize: 8,
+              color: Colors.grey[400],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      );
+    }
+
     // Get Data for the active slot
     // Safety check just in case
     if (index < 0 || index >= widget.slots.length) return SizedBox();
@@ -170,9 +304,6 @@ class _TurbineWidgetState extends State<TurbineWidget>
     final slotNum = slot['slot'] ?? "${index + 1}";
     String dateText = slot['date'] ?? ""; // e.g. "JAN 14"
     String timeText = slot['time'] ?? "NO TIME";
-
-    // Formatting Date: "JAN 14" -> "JAN\n14" or just "JAN 14"
-    // User wants: "arrow selected date and time also slot"
 
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -272,14 +403,11 @@ class TurbinePainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
 
     // 3. Draw Slots
-    // First pass: Draw all normal slots
-    // We also need to identify the active one (closest to top -pi/2) to skip or redraw.
     int closestIndex = -1;
     double minDistance = 1000.0;
 
     for (int i = 0; i < totalSlots; i++) {
       double slotCenterAngle = i * anglePerSlot + rotation - pi / 2;
-      // Normalize angle difference to [-pi, pi]
       double diff = (slotCenterAngle - (-pi / 2)) % (2 * pi);
       if (diff > pi) diff -= 2 * pi;
       if (diff < -pi) diff += 2 * pi;
@@ -291,8 +419,6 @@ class TurbinePainter extends CustomPainter {
     }
 
     for (int i = 0; i < totalSlots; i++) {
-      // Draw normal slots. If it's active, we draw it later OR we draw it here and overlay?
-      // Let's draw it here normally first.
       _drawSlot(
         canvas,
         center,
@@ -320,9 +446,6 @@ class TurbinePainter extends CustomPainter {
 
     // 4. Draw ACTIVE Slot Magnified (Pop-out effect)
     if (closestIndex != -1 && minDistance < anglePerSlot / 1.2) {
-      // Pop out radius!
-      // We expand outward beyond the wheel radius slightly
-      // and inward into the hub slightly for max text space.
       _drawSlot(
         canvas,
         center,
@@ -369,35 +492,46 @@ class TurbinePainter extends CustomPainter {
   ) {
     double startAngle = i * anglePerSlot + rotation - pi / 2;
 
-    // Color Logic
-    Color colorStart = Colors.grey[200]!;
-    Color colorEnd = Colors.grey[400]!;
+    // Color Logic (Premium / Vibrant Palette)
+    Color colorStart = Colors.white;
+    Color colorEnd = const Color(0xFFF5F7FA); // Soft Silver
     String timeText = "";
     String slotNumber = "${i + 1}";
     String dateText = "";
+    bool isDoor = (i == 14); // Index 14 is Slot 15
 
-    var slotData = slots.firstWhere(
-      (element) => element['slot'] == "${i + 1}",
-      orElse: () => {},
-    );
-    if (slotData.isNotEmpty) {
-      String status = slotData['status']?.toLowerCase() ?? "empty";
-      if (status == 'taken') {
-        colorStart = const Color(0xFF81C784);
-        colorEnd = const Color(0xFF2E7D32);
-      } else if (status == 'missed') {
-        colorStart = const Color(0xFFE57373);
-        colorEnd = const Color(0xFFC62828);
-      } else if (status == 'scheduled') {
-        colorStart = const Color(0xFF64B5F6);
-        colorEnd = const Color(0xFF1565C0);
-      } else {
-        colorStart = const Color(0xFFF5F5F5);
-        colorEnd = const Color(0xFFBDBDBD);
-      }
-      timeText = slotData['time'] ?? "";
-      if (slotData['date'] != null) {
-        dateText = slotData['date']!.toUpperCase();
+    if (isDoor) {
+      // Door: Premium Matte Gunmetal
+      colorStart = const Color(0xFF232526);
+      colorEnd = const Color(0xFF414345);
+    } else {
+      var slotData = slots.firstWhere(
+        (element) => element['slot'] == "${i + 1}",
+        orElse: () => {},
+      );
+      if (slotData.isNotEmpty) {
+        String status = slotData['status']?.toLowerCase() ?? "empty";
+        if (status == 'taken') {
+          // Success: Teal -> Lime
+          colorStart = const Color(0xFF00B09B);
+          colorEnd = const Color(0xFF96C93D);
+        } else if (status == 'missed') {
+          // Alert: Coral -> Orange
+          colorStart = const Color(0xFFFF5F6D);
+          colorEnd = const Color(0xFFFFC371);
+        } else if (status == 'scheduled') {
+          // Future: Cyan -> Royal Blue
+          colorStart = const Color(0xFF36D1DC);
+          colorEnd = const Color(0xFF5B86E5);
+        } else {
+          // Empty: Gray as requested
+          colorStart = Colors.grey[300]!;
+          colorEnd = Colors.grey[400]!;
+        }
+        timeText = slotData['time'] ?? "";
+        if (slotData['date'] != null) {
+          dateText = slotData['date']!.toUpperCase();
+        }
       }
     }
 
@@ -425,7 +559,6 @@ class TurbinePainter extends CustomPainter {
         stops: const [0.5, 1.0],
       ).createShader(Rect.fromCircle(center: center, radius: outerR));
 
-    // Draw Shadow for active slot to make it pop?
     if (isActive) {
       canvas.drawShadow(slotPath, Colors.black.withOpacity(0.4), 8.0, true);
     }
@@ -433,7 +566,6 @@ class TurbinePainter extends CustomPainter {
     canvas.drawPath(slotPath, slotPaint);
 
     // Draw Text
-    // Calculate center angle for text placement
     _drawText(
       canvas,
       center,
@@ -443,8 +575,9 @@ class TurbinePainter extends CustomPainter {
       slotNumber,
       dateText,
       timeText,
-      slotData.isEmpty || slotData['status'] == 'empty',
+      !isDoor && (timeText.isEmpty),
       isActive,
+      isDoor,
     );
   }
 
@@ -459,14 +592,11 @@ class TurbinePainter extends CustomPainter {
     String time,
     bool isEmpty,
     bool isActive,
+    bool isDoor,
   ) {
-    final textColor = isEmpty
-        ? (Colors.grey[600] ?? Colors.grey)
-        : Colors.white;
-
-    // 1. SLOT NUMBER (Outer Edge)
-    // Move it slightly inwards if active to avoid arrow overlap
-    double slotRadius = outerRadius - (isActive ? 28 : 18);
+    // 1. SLOT NUMBER / DOOR LABEL (Outer Edge)
+    // Shifted slightly closer to edge for cleaner look
+    double slotRadius = outerRadius - (isActive ? 22 : 15);
     Offset slotPos =
         center + Offset(slotRadius * cos(angle), slotRadius * sin(angle));
 
@@ -474,16 +604,20 @@ class TurbinePainter extends CustomPainter {
     canvas.translate(slotPos.dx, slotPos.dy);
     canvas.rotate(angle + pi / 2);
 
+    // Shows just "4" instead of "SLOT 4" to match image style
+    final slotText = isDoor ? "DOOR" : slotNo;
+    final slotColor = isDoor
+        ? Colors.grey[400]!.withOpacity(0.8)
+        : (isEmpty ? const Color(0xFF2D3436) : Colors.white);
+
     final slotPainter = TextPainter(
       text: TextSpan(
-        text: isActive ? "SLOT $slotNo" : slotNo,
+        text: slotText,
         style: GoogleFonts.poppins(
-          color: textColor.withOpacity(isActive ? 1.0 : 0.7),
-          fontSize: isActive
-              ? 9
-              : 12, // Smaller when active to make room for date
-          fontWeight: isActive ? FontWeight.w600 : FontWeight.bold,
-          letterSpacing: 1.0,
+          color: slotColor,
+          fontSize: (isActive || isDoor) ? 10 : 10,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.5,
         ),
       ),
       textAlign: TextAlign.center,
@@ -496,12 +630,31 @@ class TurbinePainter extends CustomPainter {
     );
     canvas.restore();
 
-    // 2. DATE (Center Body)
-    // WE STACK IT TO FIT BETTER!
-    // "14" (Big)
-    // "JAN" (Small)
-    double dateRadius = (outerRadius + innerRadius) / 2;
-    // slightly adjust active date position upwards (towards outer) to clear time
+    if (isDoor) return; // Skip Date/Time for Door
+
+    // 2. PARSE DATE (Day vs Month)
+    String day = "";
+    String month = "";
+    if (dateText.contains(" ")) {
+      var parts = dateText.split(" ");
+      // Assuming format "MMM d" (Jan 14)
+      if (parts.length > 1) {
+        month = parts[0];
+        day = parts[1];
+      } else {
+        day = dateText;
+      }
+    } else {
+      day = dateText;
+    }
+
+    // 3. CENTRAL HERO: DAY & MONTH
+    final textColor = isEmpty
+        ? const Color(0xFF2D3436) // Dark Text for Gray Background
+        : Colors.white;
+
+    // Shift center slightly up to accommodate month below day
+    double dateRadius = (outerRadius + innerRadius) / 2 + 5;
     if (isActive) dateRadius += 2;
 
     Offset datePos =
@@ -511,42 +664,26 @@ class TurbinePainter extends CustomPainter {
     canvas.translate(datePos.dx, datePos.dy);
     canvas.rotate(angle + pi / 2);
 
-    // active: Stacked Big Day, Small Month
-    // inactive: Stacked Small Day, Small Month
-
-    // Parse Date: "JAN 14" -> ["JAN", "14"]
-    String day = "";
-    String month = "";
-    if (dateText.contains(" ")) {
-      var parts = dateText.split(" ");
-      if (parts.length > 1) {
-        month = parts[0]; // JAN
-        day = parts[1]; // 14
-      } else {
-        day = dateText;
-      }
-    } else {
-      day = dateText;
-    }
-
     final dateSpan = TextSpan(
       children: [
+        // BIG DAY NUMBER (e.g. "17")
         TextSpan(
           text: "$day\n",
           style: GoogleFonts.poppins(
             color: textColor,
-            fontSize: isActive ? 24 : 14, // Big Day
-            fontWeight: isActive ? FontWeight.bold : FontWeight.w600,
-            height: 1.0,
+            fontSize: isActive ? 28 : 22, // Huge Hero Size
+            fontWeight: FontWeight.w900, // Extra Bold
+            height: 0.9,
           ),
         ),
+        // Month Name (e.g. "JAN")
         TextSpan(
-          text: month,
+          text: month.toUpperCase(),
           style: GoogleFonts.poppins(
             color: textColor.withOpacity(0.9),
-            fontSize: isActive ? 10 : 8, // Small Month
-            fontWeight: FontWeight.w500,
-            letterSpacing: 1.0,
+            fontSize: isActive ? 12 : 10,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 1.5,
           ),
         ),
       ],
@@ -560,14 +697,13 @@ class TurbinePainter extends CustomPainter {
     datePainter.layout();
     datePainter.paint(
       canvas,
-      Offset(-datePainter.width / 2, -datePainter.height / 2), // centered
+      Offset(-datePainter.width / 2, -datePainter.height / 2),
     );
     canvas.restore();
 
-    // 3. TIME (Inner Edge)
+    // 4. TIME (Inner Edge - Small)
     if (time.isNotEmpty) {
-      // Push time closer to hub if active to separate from Date
-      double timeRadius = innerRadius + (isActive ? 22 : 22);
+      double timeRadius = innerRadius + (isActive ? 18 : 18);
       Offset timePos =
           center + Offset(timeRadius * cos(angle), timeRadius * sin(angle));
 
@@ -577,7 +713,7 @@ class TurbinePainter extends CustomPainter {
 
       final timePainter = TextPainter(
         text: TextSpan(
-          text: time.replaceAll(' ', '\n'),
+          text: time.replaceAll(' ', '\n'), // Wraps 08:00 \n AM
           style: GoogleFonts.poppins(
             color: textColor.withOpacity(0.8),
             fontSize: isActive ? 9 : 8,

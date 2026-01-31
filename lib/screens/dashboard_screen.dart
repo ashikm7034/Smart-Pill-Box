@@ -1,13 +1,17 @@
 import 'dart:async';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
 import '../components/turbine_widget.dart';
 import 'device_scan_screen.dart';
 import 'settings_screen.dart';
+import '../services/firebase_service.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -21,66 +25,189 @@ class _DashboardScreenState extends State<DashboardScreen> {
   DateTime _now = DateTime.now();
   bool _isConnected = false;
   int _heartRate = 72;
-  final Random _random = Random();
 
-  // Initialize in initState to get fresh dates
-  List<Map<String, String>> _slotData = [];
+  // Initialize with 15 empty slots (User Requirement)
+  List<Map<String, String>> _slotData = List.generate(15, (index) {
+    return {
+      "slot": "${index + 1}",
+      "time": "", // Empty on start
+      "date": "", // Empty on start
+      "status": "empty",
+    };
+  });
+
+  late FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin;
 
   @override
   void initState() {
     super.initState();
-    _generateMockData();
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (mounted) {
-        setState(() {
-          _now = DateTime.now();
-          if (timer.tick % 3 == 0) {
-            // Randomize heart rate every 3 seconds
-            _heartRate = 60 + _random.nextInt(40); // 60-100 BPM
-          }
-        });
+    // Force 15 slots if they don't exist
+    if (_slotData.isEmpty) {
+      _slotData = List.generate(
+        15,
+        (index) => {
+          "slot": (index + 1).toString(),
+          "time": "",
+          "date": "",
+          "status": "empty",
+        },
+      );
+    }
+
+    // Initialize Local Notifications
+    flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const InitializationSettings initializationSettings =
+        InitializationSettings(android: initializationSettingsAndroid);
+    flutterLocalNotificationsPlugin.initialize(initializationSettings);
+
+    // Listen to Firebase Realtime Database
+    _initializeFirebaseListeners();
+
+    // Setup Notifications
+    _setupNotifications();
+
+    // Auto-connect timer
+    _timer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      if (!_isConnected && !FlutterBluePlus.isScanningNow) {
+        _checkAutoConnect();
       }
     });
 
+    // Initial check
     _checkAutoConnect();
   }
 
-  void _generateMockData() {
-    // Generate next 15 days/slots mock
-    DateTime base = DateTime.now();
-    _slotData = List.generate(15, (index) {
-      DateTime d = base.add(Duration(days: index));
-      return {
-        "slot": "${index + 1}",
-        "time": "08:00 AM",
-        "date": DateFormat('MMM d').format(d), // e.g. "Jan 14"
-        "status": index == 0
-            ? "taken"
-            : (index < 4 ? "scheduled" : "empty"), // random statuses
-      };
+  Future<void> _setupNotifications() async {
+    FirebaseMessaging messaging = FirebaseMessaging.instance;
+
+    // 1. Request Permission
+    await messaging.requestPermission(alert: true, badge: true, sound: true);
+
+    // 2. Subscribe to Topic
+    await messaging.subscribeToTopic('pillbox_users');
+    print("Subscribed to pillbox_users");
+
+    // 3. Handle Foreground Messages (HEADS UP!)
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+      print('Got a message whilst in the foreground!');
+
+      RemoteNotification? notification = message.notification;
+      AndroidNotification? android = message.notification?.android;
+
+      if (notification != null && android != null) {
+        // Define Channel
+        const AndroidNotificationDetails androidPlatformChannelSpecifics =
+            AndroidNotificationDetails(
+          'high_importance_channel', // id
+          'High Importance Notifications', // title
+          channelDescription: 'Used for important notifications.',
+          importance: Importance.max,
+          priority: Priority.high,
+          showWhen: true,
+          color: Color(0xFF4A90E2),
+        );
+
+        const NotificationDetails platformChannelSpecifics =
+            NotificationDetails(android: androidPlatformChannelSpecifics);
+
+        // SHOW NOTIFICATION (Heads-up)
+        await flutterLocalNotificationsPlugin.show(
+          notification.hashCode,
+          notification.title,
+          notification.body,
+          platformChannelSpecifics,
+        );
+      }
     });
   }
 
-  Future<void> _checkAutoConnect() async {
-    // 1. Check if we already have a connected device (e.g. from hot reload or previous)
-    if (FlutterBluePlus.connectedDevices.isNotEmpty) {
-      setState(() {
-        _isConnected = true;
-      });
-      return;
-    }
+  void _initializeFirebaseListeners() {
+    // 1. Listen to Slots
+    FirebaseService().slotsStream.listen((DatabaseEvent event) {
+      if (event.snapshot.value != null) {
+        final data = event.snapshot.value as Map<dynamic, dynamic>;
 
-    // 2. Check SharedPreferences for last device
+        // Create a copy of current fixed list
+        List<Map<String, String>> updatedSlots = List.from(_slotData);
+
+        if (data is List) {
+          for (var i = 0; i < data.length && i < 15; i++) {
+            if (data[i] == null) continue;
+            var item = Map<String, dynamic>.from(data[i]);
+            // Lists are usually 0-indexed, but our slots are 1-15.
+            // Assuming data[i] corresponds to slot i+1
+            updatedSlots[i] = {
+              "slot": "${i + 1}",
+              "time": item['time']?.toString() ?? "",
+              "date": item['date']?.toString() ?? "",
+              "status": item['status']?.toString() ?? "empty",
+            };
+          }
+        } else {
+          // Map: Loop through 1 to 15
+          for (int i = 1; i <= 15; i++) {
+            var key = i.toString();
+            if (data.containsKey(key)) {
+              var item = Map<String, dynamic>.from(data[key]);
+              updatedSlots[i - 1] = {
+                "slot": key,
+                "time": item['time']?.toString() ?? "",
+                "date": item['date']?.toString() ?? "",
+                "status": item['status']?.toString() ?? "empty",
+              };
+            }
+          }
+        }
+
+        if (mounted) {
+          setState(() {
+            _slotData = updatedSlots;
+          });
+        }
+      } else {
+        // No databse data? Keep default empty slots.
+        // Optional: FirebaseService().initializeMockData();
+      }
+    });
+
+    // 2. Listen to Heart Rate
+    FirebaseService().heartRateStream.listen((event) {
+      if (event.snapshot.value != null) {
+        final data = event.snapshot.value as Map<dynamic, dynamic>;
+        if (mounted) {
+          setState(() {
+            _heartRate = data['bpm'] ?? 0;
+          });
+        }
+      }
+    });
+  }
+
+  // Auto-connect removed from init to separate method call
+  // Mock data generation removed
+
+  Future<void> _checkAutoConnect() async {
     final prefs = await SharedPreferences.getInstance();
     final String? deviceId = prefs.getString('device_id');
 
+    // If already connected (e.g. from Scan Screen), just sync
+    if (FlutterBluePlus.connectedDevices.isNotEmpty) {
+      if (mounted)
+        setState(() {
+          _isConnected = true;
+        });
+      await _startBLEListening(FlutterBluePlus.connectedDevices.first);
+      await _requestDataFromESP();
+      return;
+    }
+
     if (deviceId != null) {
       print("Found saved device: $deviceId. Attempting auto-connect...");
-      // Attempt to scan and find this specific device
       try {
         await FlutterBluePlus.startScan(
           timeout: const Duration(seconds: 5),
-          withServices: [], // Optional: filter by service UUIDs if known
         );
 
         FlutterBluePlus.scanResults.listen((results) async {
@@ -96,6 +223,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   });
                 }
                 print("Auto-connected!");
+                await _startBLEListening(r.device);
+                await _requestDataFromESP();
               } catch (e) {
                 print("Auto-connect failed: $e");
               }
@@ -105,6 +234,61 @@ class _DashboardScreenState extends State<DashboardScreen> {
       } catch (e) {
         print("Error during auto-connect scan: $e");
       }
+    }
+  }
+
+  Future<void> _startBLEListening(BluetoothDevice device) async {
+    try {
+      List<BluetoothService> services = await device.discoverServices();
+      for (var s in services) {
+        // Our Service
+        if (s.uuid.toString() == "4fafc201-1fb5-459e-8fcc-c5c9c331914b") {
+          for (var c in s.characteristics) {
+            // Our Characteristic
+            if (c.uuid.toString() == "beb5483e-36e1-4688-b7f5-ea07361b26a8") {
+              await c.setNotifyValue(true);
+              c.lastValueStream.listen((value) {
+                String data = String.fromCharCodes(value);
+                print("BLE Received: $data");
+
+                if (data.startsWith("SLOT_DATA:")) {
+                  // Format: SLOT_DATA:1:08:00 AM:Jan 14:scheduled
+                  // Split by ':' -> [SLOT_DATA, 1, 08, 00 AM, Jan 14, scheduled]
+                  var parts = data.split(':');
+                  if (parts.length >= 6) {
+                    int id = int.parse(parts[1]);
+                    // Reconstruct Time "08" + ":" + "00 AM"
+                    String t = "${parts[2]}:${parts[3]}";
+                    String d = parts[4];
+                    String st = parts[5];
+
+                    // Update correct slot
+                    _updateSlotFromBLE(id, t, d, st);
+                  }
+                }
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print("BLE Listen Error: $e");
+    }
+  }
+
+  void _updateSlotFromBLE(int id, String time, String date, String status) {
+    if (mounted) {
+      setState(() {
+        // _slotData is 0-indexed
+        if (id > 0 && id <= 15) {
+          _slotData[id - 1] = {
+            "slot": id.toString(),
+            "time": time,
+            "date": date,
+            "status": status,
+          };
+        }
+      });
     }
   }
 
@@ -130,7 +314,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => const DeviceScanScreen()),
-    );
+    ).then((_) {
+      // Re-check connection and sync when returning
+      _checkAutoConnect();
+    });
   }
 
   void _openSettings() {
@@ -151,33 +338,111 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
-  void _handleSlotTap(int slotIndex) {
-    // Find existing data or create default
-    Map<String, String> currentData = _slotData.firstWhere(
-      (element) => element['slot'] == slotIndex.toString(),
-      orElse: () {
-        DateTime d = DateTime.now().add(Duration(days: slotIndex - 1));
-        return {
-          "slot": slotIndex.toString(),
-          "time": "08:00 AM",
-          "date": DateFormat('MMM d').format(d),
-          "status": "empty",
-        };
-      },
-    );
+  final TurbineController _turbineController = TurbineController();
 
-    _showEditSlotDialog(currentData);
+  void _handleSlotTap(int slotIndex) {
+    // User requested to ALWAYS start editing from Slot 1
+    _startEditFlow(1);
   }
 
-  Future<void> _showEditSlotDialog(Map<String, String> data) async {
+  Future<void> _startEditFlow(int slotIndex) async {
+    // 1. Animate to the slot
+    await _turbineController.animateToSlot(slotIndex);
+
+    // 2. Find data
+    if (!mounted) return;
+
+    // Logic: Look for existing data. If empty, calculate "Suggested" default.
+    Map<String, String> currentData = _slotData.firstWhere(
+      (element) => element['slot'] == slotIndex.toString(),
+      orElse: () => {},
+    );
+
+    // Create a copy to edit effectively, populating defaults if missing
+    Map<String, String> editData = Map.from(currentData);
+    if (editData.isEmpty) {
+      editData = {
+        "slot": slotIndex.toString(),
+        "time": "",
+        "date": "",
+        "status": "empty"
+      };
+    }
+
+    // Auto-fill defaults for the DIALOG if empty
+    if (editData['date'] == null || editData['date']!.isEmpty) {
+      DateTime d = DateTime.now().add(Duration(days: slotIndex - 1));
+      editData['date'] = DateFormat('MMM d').format(d);
+    }
+    if (editData['time'] == null || editData['time']!.isEmpty) {
+      editData['time'] = "08:00 AM";
+    }
+
+    // 3. Show Dialog
+    _showEditSlotDialog(editData, slotIndex);
+  }
+
+  // Method to send Slot Data to BLE
+  Future<void> _sendSlotToBLE(int slotId, String time, String date) async {
+    if (FlutterBluePlus.connectedDevices.isEmpty) return;
+
+    try {
+      final device = FlutterBluePlus.connectedDevices.first;
+      final services = await device.discoverServices();
+      for (var s in services) {
+        if (s.uuid.toString() == "4fafc201-1fb5-459e-8fcc-c5c9c331914b") {
+          for (var c in s.characteristics) {
+            if (c.uuid.toString() == "beb5483e-36e1-4688-b7f5-ea07361b26a8") {
+              // Format: "SLOT:ID:TIME:DATE"
+              String cmd = "SLOT:$slotId:$time:$date";
+              await c.write(cmd.codeUnits);
+              print("Sent to BLE: $cmd");
+              break;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print("BLE Write Error: $e");
+    }
+  }
+
+  // Send request for data sync
+  Future<void> _requestDataFromESP() async {
+    if (FlutterBluePlus.connectedDevices.isEmpty) return;
+    // Re-use logic or make a generic write method
+    try {
+      final device = FlutterBluePlus.connectedDevices.first;
+      final services = await device.discoverServices();
+      for (var s in services) {
+        if (s.uuid.toString() == "4fafc201-1fb5-459e-8fcc-c5c9c331914b") {
+          for (var c in s.characteristics) {
+            if (c.uuid.toString() == "beb5483e-36e1-4688-b7f5-ea07361b26a8") {
+              String cmd = "give_data";
+              await c.write(cmd.codeUnits);
+              print("Sent to BLE: $cmd");
+              break;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print("BLE Sync Error: $e");
+    }
+  }
+
+  Future<void> _showEditSlotDialog(
+      Map<String, String> data, int currentSlotIndex) async {
     String time = data['time']!;
-    String status = data['status']!;
-    String dateStr = data['date'] ?? DateFormat('MMM d').format(DateTime.now());
+
+    // Default to 'scheduled' since we removed the dropdown
+    String status = "scheduled";
+
+    // Use data['date'] (which we ensured is populated in startEditFlow)
+    String dateStr = data['date']!;
 
     // Parse time
     TimeOfDay initialTime = TimeOfDay.now();
-    // ... parse logic same ...
-
     try {
       final parts = time.split(" ");
       final hm = parts[0].split(":");
@@ -187,11 +452,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (parts[1] == "AM" && h == 12) h = 0;
       initialTime = TimeOfDay(hour: h, minute: m);
     } catch (e) {
-      // Keep default
+      // use default
     }
 
     await showDialog(
       context: context,
+      barrierDismissible: false, // Force user to choose action
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
@@ -220,9 +486,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         setDialogState(() {
                           initialTime = picked;
                           String period = picked.hour >= 12 ? "PM" : "AM";
-                          int h = picked.hour > 12
-                              ? picked.hour - 12
-                              : picked.hour;
+                          int h =
+                              picked.hour > 12 ? picked.hour - 12 : picked.hour;
                           h = h == 0 ? 12 : h;
                           time =
                               "${h.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')} $period";
@@ -230,7 +495,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       }
                     },
                   ),
-                  // Date Picker (Basic String Edit or DatePicker? Let's use DatePicker)
+                  // Date Picker
                   ListTile(
                     leading: const Icon(Icons.calendar_today),
                     title: Text("Date", style: GoogleFonts.poppins()),
@@ -254,33 +519,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
 
                   const SizedBox(height: 10),
-                  // Status Dropdown
-                  DropdownButtonFormField<String>(
-                    value: status,
-                    decoration: InputDecoration(
-                      labelText: "Status",
-                      labelStyle: GoogleFonts.poppins(),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                    ),
-                    items: ["empty", "scheduled", "taken", "missed"].map((s) {
-                      return DropdownMenuItem(
-                        value: s,
-                        child: Text(
-                          s[0].toUpperCase() + s.substring(1),
-                          style: GoogleFonts.poppins(),
-                        ),
-                      );
-                    }).toList(),
-                    onChanged: (val) {
-                      if (val != null) {
-                        setDialogState(() {
-                          status = val;
-                        });
-                      }
-                    },
-                  ),
+                  // Status Dropdown REMOVED as requested.
+                  // Default is scheduled.
                 ],
               ),
               actions: [
@@ -290,28 +530,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 ElevatedButton(
                   onPressed: () {
-                    // Save Changes
-                    setState(() {
-                      // Remove old entry if exists to avoid duplicates (though logic shouldn't allow duplicates of same slot key usually, but list might have them)
-                      _slotData.removeWhere(
-                        (element) => element['slot'] == data['slot'],
-                      );
-                      _slotData.add({
-                        "slot": data['slot']!,
-                        "time": time,
-                        "date": dateStr,
-                        "status": status,
-                      });
-                      // Sort by slot number just in case
-                      _slotData.sort(
-                        (a, b) => int.parse(
-                          a['slot']!,
-                        ).compareTo(int.parse(b['slot']!)),
-                      );
-                    });
+                    // Logic: Save & NEXT
+
+                    // 1. Send to BLE (ID, Time, Date)
+                    _sendSlotToBLE(int.parse(data['slot']!), time, dateStr);
+
+                    // 2. Save to Firebase (Force status = scheduled)
+                    final newData = {
+                      "slot": data['slot']!,
+                      "time": time,
+                      "date": dateStr,
+                      "status": "scheduled",
+                      "medicine": "Medicine Name",
+                    };
+                    FirebaseService().updateSlot(
+                      int.parse(data['slot']!),
+                      newData,
+                    );
+
                     Navigator.pop(context);
+
+                    // 3. Next?
+                    int nextIndex = currentSlotIndex + 1;
+                    if (nextIndex <= 14) {
+                      Future.delayed(const Duration(milliseconds: 200), () {
+                        _startEditFlow(nextIndex);
+                      });
+                    }
                   },
-                  child: Text("Save", style: GoogleFonts.poppins()),
+                  child: Text(
+                      (currentSlotIndex < 14) ? "Save & Next" : "Save & Finish",
+                      style: GoogleFonts.poppins()),
                 ),
               ],
             );
@@ -488,6 +737,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           ),
                         ],
                       ),
+                      const Spacer(),
+                      if (_isConnected)
+                        GestureDetector(
+                          onTap: () async {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text("Syncing data..."),
+                                  duration: Duration(milliseconds: 500)),
+                            );
+                            await _requestDataFromESP();
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              shape: BoxShape.circle,
+                            ),
+                            child:
+                                const Icon(Icons.refresh, color: Colors.white),
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -501,6 +771,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   child: TurbineWidget(
                     slots: _slotData,
                     onSlotTap: _handleSlotTap,
+                    controller: _turbineController,
                   ),
                 ),
               ),

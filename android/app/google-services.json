@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "673813984050",
+    "project_id": "smart-pill-box-by-techiedo",
+    "storage_bucket": "smart-pill-box-by-techiedo.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:673813984050:android:9320d2349db57bc6b81d2b",
+        "android_client_info": {
+          "package_name": "com.smartpill.bytechido"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAmubZhqC2v0GcDNX2FuR4UosSUZg4VJYQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
