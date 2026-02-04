@@ -70,13 +70,8 @@ class _DeviceScanScreenState extends State<DeviceScanScreen>
       if (mounted) {
         setState(() {
           // FILTER: Only show devices starting with "Smart Pill"
-          _scanResults = results
-              .where(
-                (r) =>
-                    r.device.platformName.startsWith("Smart Pill") ||
-                    r.device.localName.startsWith("Smart Pill"),
-              )
-              .toList();
+          // SHOW ALL DEVICES
+          _scanResults = results.toList();
         });
       }
     });
@@ -303,7 +298,7 @@ class _DeviceScanScreenState extends State<DeviceScanScreen>
                           ),
                           const SizedBox(height: 16),
                           Text(
-                            "No smart pill device found",
+                            "No Bluetooth devices found",
                             style: GoogleFonts.poppins(color: Colors.grey[500]),
                           ),
                           TextButton(
