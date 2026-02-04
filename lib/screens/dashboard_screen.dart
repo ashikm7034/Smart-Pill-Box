@@ -338,9 +338,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
+  // Generic Command Sender
+  Future<void> _sendCommand(String cmd) async {
+    if (FlutterBluePlus.connectedDevices.isEmpty) return;
+    try {
+      final device = FlutterBluePlus.connectedDevices.first;
+      final services = await device.discoverServices();
+      for (var s in services) {
+        if (s.uuid.toString() == "4fafc201-1fb5-459e-8fcc-c5c9c331914b") {
+          for (var c in s.characteristics) {
+            if (c.uuid.toString() == "beb5483e-36e1-4688-b7f5-ea07361b26a8") {
+              await c.write(cmd.codeUnits);
+              print("Sent to BLE: $cmd");
+              break;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print("BLE Command Error: $e");
+    }
+  }
+
   final TurbineController _turbineController = TurbineController();
 
   void _handleSlotTap(int slotIndex) {
+    // Send "edit" signal to ESP32 as requested
+    _sendCommand("edit");
+
     // User requested to ALWAYS start editing from Slot 1
     _startEditFlow(1);
   }
@@ -384,51 +409,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // Method to send Slot Data to BLE
   Future<void> _sendSlotToBLE(int slotId, String time, String date) async {
-    if (FlutterBluePlus.connectedDevices.isEmpty) return;
-
-    try {
-      final device = FlutterBluePlus.connectedDevices.first;
-      final services = await device.discoverServices();
-      for (var s in services) {
-        if (s.uuid.toString() == "4fafc201-1fb5-459e-8fcc-c5c9c331914b") {
-          for (var c in s.characteristics) {
-            if (c.uuid.toString() == "beb5483e-36e1-4688-b7f5-ea07361b26a8") {
-              // Format: "SLOT:ID:TIME:DATE"
-              String cmd = "SLOT:$slotId:$time:$date";
-              await c.write(cmd.codeUnits);
-              print("Sent to BLE: $cmd");
-              break;
-            }
-          }
-        }
-      }
-    } catch (e) {
-      print("BLE Write Error: $e");
-    }
+    // Reuse generic command
+    String cmd = "SLOT:$slotId:$time:$date";
+    await _sendCommand(cmd);
   }
 
   // Send request for data sync
   Future<void> _requestDataFromESP() async {
-    if (FlutterBluePlus.connectedDevices.isEmpty) return;
-    // Re-use logic or make a generic write method
-    try {
-      final device = FlutterBluePlus.connectedDevices.first;
-      final services = await device.discoverServices();
-      for (var s in services) {
-        if (s.uuid.toString() == "4fafc201-1fb5-459e-8fcc-c5c9c331914b") {
-          for (var c in s.characteristics) {
-            if (c.uuid.toString() == "beb5483e-36e1-4688-b7f5-ea07361b26a8") {
-              String cmd = "give_data";
-              await c.write(cmd.codeUnits);
-              print("Sent to BLE: $cmd");
-              break;
-            }
-          }
-        }
-      }
-    } catch (e) {
-      print("BLE Sync Error: $e");
-    }
+    await _sendCommand("give_data");
   }
 
   Future<void> _showEditSlotDialog(

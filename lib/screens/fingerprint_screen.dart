@@ -430,7 +430,14 @@ class _FingerprintScreenState extends State<FingerprintScreen> {
       subscription = _writeCharacteristic!.lastValueStream.listen((value) {
         String msg = utf8.decode(value).trim();
         print("Stream received: $msg");
-        if (!_responseCompleter.isCompleted && msg == "ok") {
+
+        if (msg.toLowerCase().contains("fail")) {
+          // Handle Failure locally without aborting flow
+          if (mounted) {
+            statusMessage.value = "Failed. Please Try Again.";
+            // Optional: Trigger haptic feedback here
+          }
+        } else if (!_responseCompleter.isCompleted && msg == "ok") {
           _responseCompleter.complete(msg);
         }
       });
