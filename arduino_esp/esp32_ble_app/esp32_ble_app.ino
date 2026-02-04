@@ -18,7 +18,7 @@ void setup() {
   pillMemory.begin(); // Init EEPROM via Library
   
   // Start Bluetooth query
-  ble.begin("Smart Pill Box");
+  ble.begin("ashik");
   
   // Connect to WiFi for Notifications
   // REPLACE WITH YOUR WIFI CREDENTIALS IN PRODUCTION

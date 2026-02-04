@@ -79,6 +79,10 @@ bool PillFCM::sendNotification(String title, String body) {
         return false;
     }
 
+    // Use WiFiClientSecure for SSL
+    WiFiClientSecure client;
+    client.setInsecure(); // Ignore SSL certificate validation (simplest for Hobbyist)
+    
     HTTPClient http;
     
     // User Provided Script URL
@@ -87,7 +91,7 @@ bool PillFCM::sendNotification(String title, String body) {
     Serial.println("FCM: Sending to Script...");
     
     // Begin connection (Secure 443)
-    http.begin(scriptUrl);
+    http.begin(client, scriptUrl); // Pass the secure client!
     http.addHeader("Content-Type", "application/json");
     
     // Google Scripts redirect (302) to a content server
