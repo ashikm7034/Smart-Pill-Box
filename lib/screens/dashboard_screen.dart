@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'dart:convert';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
@@ -41,6 +42,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    // Load local data
+    _loadLocalSlots();
+
     // Force 15 slots if they don't exist
     if (_slotData.isEmpty) {
       _slotData = List.generate(
@@ -123,6 +127,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
+  // --- LOCAL PERSISTENCE HELPERS ---
+
+  Future<void> _loadLocalSlots() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      String? jsonStr = prefs.getString('cached_slots');
+      if (jsonStr != null) {
+        List<dynamic> decoded = jsonDecode(jsonStr);
+        if (mounted) {
+          setState(() {
+            _slotData =
+                decoded.map((e) => Map<String, String>.from(e)).toList();
+          });
+        }
+      }
+    } catch (e) {
+      print("Error loading local slots: $e");
+    }
+  }
+
+  Future<void> _saveLocalSlots(List<Map<String, String>> slots) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      String jsonStr = jsonEncode(slots);
+      await prefs.setString('cached_slots', jsonStr);
+    } catch (e) {
+      print("Error saving local slots: $e");
+    }
+  }
+
   void _initializeFirebaseListeners() {
     // 1. Listen to Slots
     FirebaseService().slotsStream.listen((DatabaseEvent event) {
@@ -160,6 +194,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             }
           }
         }
+
+        // SAVE LOCALLY (Cache for offline/startup)
+        _saveLocalSlots(updatedSlots);
 
         if (mounted) {
           setState(() {
