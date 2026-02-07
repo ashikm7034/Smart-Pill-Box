@@ -7,7 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dashboard_screen.dart';
 
 class DeviceScanScreen extends StatefulWidget {
-  const DeviceScanScreen({super.key});
+  final String? targetName;
+  const DeviceScanScreen({super.key, this.targetName});
 
   @override
   State<DeviceScanScreen> createState() => _DeviceScanScreenState();
@@ -68,10 +69,28 @@ class _DeviceScanScreenState extends State<DeviceScanScreen>
 
     FlutterBluePlus.scanResults.listen((results) {
       if (mounted) {
+        // DEBUG: Print found devices
+        for (var r in results) {
+          if (r.device.platformName.isNotEmpty) {
+            print("Found: '${r.device.platformName}' (${r.device.remoteId})");
+          }
+        }
+
         setState(() {
-          // FILTER: Only show devices starting with "Smart Pill"
-          // SHOW ALL DEVICES
-          _scanResults = results.toList();
+          // FILTER: Macth targetName OR fallback to "Smart Pill"
+          // Also explicitly allow "Smart Band" if target is "Smart Pill Band"
+          _scanResults = results.where((r) {
+            String filter = widget.targetName ?? "Smart Pill";
+            bool match = r.device.platformName.startsWith(filter) ||
+                r.device.localName.startsWith(filter);
+
+            if (!match && widget.targetName == "Smart Pill Band") {
+              match =
+                  r.device.platformName.startsWith("Smart Band") || // Old name
+                      r.device.platformName.startsWith("Smart Pill"); // Generic
+            }
+            return match;
+          }).toList();
         });
       }
     });
@@ -145,11 +164,16 @@ class _DeviceScanScreenState extends State<DeviceScanScreen>
       }
 
       if (mounted) {
-        // FORCE NAVIGATION: Clear stack and go to Dashboard
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (context) => const DashboardScreen()),
-          (Route<dynamic> route) => false,
-        );
+        if (widget.targetName != null) {
+          // Return the connected device to the caller (SettingsScreen)
+          Navigator.pop(context, device);
+        } else {
+          // FORCE NAVIGATION: Clear stack and go to Dashboard
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (context) => const DashboardScreen()),
+            (Route<dynamic> route) => false,
+          );
+        }
       }
     } catch (e) {
       if (mounted) {

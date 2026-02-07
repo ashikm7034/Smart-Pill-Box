@@ -491,66 +491,100 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 "Edit Slot ${data['slot']}",
                 style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
               ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Time Picker
-                  ListTile(
-                    leading: const Icon(Icons.access_time),
-                    title: Text("Time", style: GoogleFonts.poppins()),
-                    trailing: Text(
-                      time,
-                      style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Time Picker
+                    // Time Picker
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () async {
+                          final TimeOfDay? picked = await showTimePicker(
+                            context: context,
+                            initialTime: initialTime,
+                          );
+                          if (picked != null) {
+                            setDialogState(() {
+                              initialTime = picked;
+                              String period = picked.hour >= 12 ? "PM" : "AM";
+                              int h = picked.hour > 12
+                                  ? picked.hour - 12
+                                  : picked.hour;
+                              h = h == 0 ? 12 : h;
+                              time =
+                                  "${h.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')} $period";
+                            });
+                          }
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 12.0, horizontal: 8.0),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.access_time),
+                              const SizedBox(width: 16),
+                              Text("Time", style: GoogleFonts.poppins()),
+                              const Spacer(),
+                              Text(
+                                time,
+                                style: GoogleFonts.poppins(
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ),
-                    onTap: () async {
-                      final TimeOfDay? picked = await showTimePicker(
-                        context: context,
-                        initialTime: initialTime,
-                      );
-                      if (picked != null) {
-                        setDialogState(() {
-                          initialTime = picked;
-                          String period = picked.hour >= 12 ? "PM" : "AM";
-                          int h =
-                              picked.hour > 12 ? picked.hour - 12 : picked.hour;
-                          h = h == 0 ? 12 : h;
-                          time =
-                              "${h.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')} $period";
-                        });
-                      }
-                    },
-                  ),
-                  // Date Picker
-                  ListTile(
-                    leading: const Icon(Icons.calendar_today),
-                    title: Text("Date", style: GoogleFonts.poppins()),
-                    trailing: Text(
-                      dateStr,
-                      style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+                    // Date Picker
+                    // Date Picker
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () async {
+                          final DateTime? picked = await showDatePicker(
+                            context: context,
+                            initialDate: DateTime.now(),
+                            firstDate: DateTime(2024),
+                            lastDate: DateTime(2030),
+                          );
+                          if (picked != null) {
+                            setDialogState(() {
+                              dateStr = DateFormat('MMM d').format(picked);
+                            });
+                          }
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 12.0, horizontal: 8.0),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.calendar_today),
+                              const SizedBox(width: 16),
+                              Text("Date", style: GoogleFonts.poppins()),
+                              const Spacer(),
+                              Text(
+                                dateStr,
+                                style: GoogleFonts.poppins(
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ),
-                    onTap: () async {
-                      final DateTime? picked = await showDatePicker(
-                        context: context,
-                        initialDate: DateTime.now(),
-                        firstDate: DateTime(2024),
-                        lastDate: DateTime(2030),
-                      );
-                      if (picked != null) {
-                        setDialogState(() {
-                          dateStr = DateFormat('MMM d').format(picked);
-                        });
-                      }
-                    },
-                  ),
-
-                  const SizedBox(height: 10),
-                  // Status Dropdown REMOVED as requested.
-                  // Default is scheduled.
-                ],
+                    const SizedBox(height: 10),
+                  ],
+                ),
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () {
+                    _sendCommand("cancel");
+                    Navigator.pop(context);
+                  },
                   child: Text("Cancel", style: GoogleFonts.poppins()),
                 ),
                 ElevatedButton(
@@ -632,6 +666,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ],
                     ),
                   ),
+
+                  // Settings Button
+                  IconButton(
+                    icon: const Icon(Icons.settings, color: Colors.grey),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const SettingsScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(width: 8),
 
                   // Time & Date Container
                   Container(

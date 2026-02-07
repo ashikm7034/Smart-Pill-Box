@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'device_scan_screen.dart';
 import 'fingerprint_screen.dart';
+import 'dart:convert';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -297,6 +298,89 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     },
                   ),
                 ),
+
+                // Smart Bands Section
+                const SizedBox(height: 20),
+                _buildSectionTitle("Smart Bands"),
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 10,
+                        offset: const Offset(0, 5),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFFFEBEE), // Red tint
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.medical_services_rounded,
+                            color: Colors.redAccent,
+                          ),
+                        ),
+                        title: Text(
+                          "Connect Patient Band",
+                          style:
+                              GoogleFonts.poppins(fontWeight: FontWeight.w600),
+                        ),
+                        subtitle: Text(
+                          "Pair with the Patient's Watch",
+                          style: GoogleFonts.poppins(fontSize: 12),
+                        ),
+                        trailing: const Icon(
+                          Icons.arrow_forward_ios_rounded,
+                          size: 16,
+                        ),
+                        onTap: () => _connectToBand("Patient Band"),
+                      ),
+                      const Divider(),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFE8F5E9), // Green tint
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.people_rounded,
+                            color: Colors.green,
+                          ),
+                        ),
+                        title: Text(
+                          "Connect Bystander Band",
+                          style:
+                              GoogleFonts.poppins(fontWeight: FontWeight.w600),
+                        ),
+                        subtitle: Text(
+                          "Pair with the Bystander's Watch",
+                          style: GoogleFonts.poppins(fontSize: 12),
+                        ),
+                        trailing: const Icon(
+                          Icons.arrow_forward_ios_rounded,
+                          size: 16,
+                        ),
+                        onTap: () => _connectToBand("Bystander Band"),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
     );
@@ -312,5 +396,150 @@ class _SettingsScreenState extends State<SettingsScreen> {
         letterSpacing: 1.0,
       ),
     );
+  }
+
+  Future<void> _connectToBand(String bandType) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) =>
+            const DeviceScanScreen(targetName: "Smart Pill Band"),
+      ),
+    );
+
+    if (result != null && result is BluetoothDevice) {
+      if (mounted) {
+        _showWiFiConfigDialog(bandType, result);
+      }
+    }
+  }
+
+  Future<void> _showWiFiConfigDialog(
+      String bandType, BluetoothDevice device) async {
+    final TextEditingController ssidController = TextEditingController();
+    final TextEditingController passController = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text("Connect $bandType to WiFi",
+              style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: ssidController,
+                decoration: InputDecoration(
+                  labelText: "WiFi Name (SSID)",
+                  labelStyle: GoogleFonts.poppins(),
+                  prefixIcon: const Icon(Icons.wifi),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: passController,
+                decoration: InputDecoration(
+                  labelText: "WiFi Password",
+                  labelStyle: GoogleFonts.poppins(),
+                  prefixIcon: const Icon(Icons.lock),
+                ),
+                obscureText: true,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text("Cancel", style: GoogleFonts.poppins()),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                String ssid = ssidController.text.trim();
+                String pass = passController.text.trim();
+
+                if (ssid.isNotEmpty && pass.isNotEmpty) {
+                  Navigator.pop(context);
+                  _sendWiFiToDevice(device, ssid, pass);
+                }
+              },
+              child: Text("Connect", style: GoogleFonts.poppins()),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _sendWiFiToDevice(
+      BluetoothDevice device, String ssid, String pass) async {
+    try {
+      // Discover services
+      List<BluetoothService> services = await device.discoverServices();
+      bool sent = false;
+
+      // Look for our specific characteristic or write to ANY writable characteristic for now
+      // Since we controlled the firmware, we know the UUIDs in esp32_watch.ino:
+      // SERVICE: 12345678-1234-1234-1234-1234567890ab
+      // CHAR: abcdef01-1234-5678-1234-567890abcdef
+
+      // Targeted UUIDs from esp32_watch.ino
+      const String SERVICE_UUID = "12345678-1234-1234-1234-1234567890ab";
+      const String CHAR_UUID = "abcdef01-1234-5678-1234-567890abcdef";
+
+      for (var service in services) {
+        if (service.uuid.toString() == SERVICE_UUID) {
+          for (var characteristic in service.characteristics) {
+            if (characteristic.uuid.toString() == CHAR_UUID) {
+              print("Found Watch Characteristic: $CHAR_UUID");
+              String cmd = "WIFI:$ssid:$pass";
+              await characteristic.write(utf8.encode(cmd));
+              sent = true;
+              break;
+            }
+          }
+        }
+        if (sent) break;
+      }
+
+      if (!sent) {
+        // Fallback: Try any writable if specific not found (unlikely but safe)
+        print("Specific UUID not found, trying generic fallback...");
+        for (var service in services) {
+          for (var characteristic in service.characteristics) {
+            if (characteristic.properties.write) {
+              String cmd = "WIFI:$ssid:$pass";
+              await characteristic.write(utf8.encode(cmd));
+              sent = true;
+              break;
+            }
+          }
+          if (sent) break;
+        }
+      }
+
+      if (sent) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("WiFi Credentials Sent!")),
+          );
+        }
+
+        // Add delay to ensure packet flushing before disconnect
+        await Future.delayed(const Duration(milliseconds: 1000));
+
+        // Disconnect immediately as requested
+        await device.disconnect();
+        print("Device disconnected after sending WiFi config.");
+      } else {
+        throw "No writable characteristic found";
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error sending data: $e")),
+        );
+      }
+    }
   }
 }

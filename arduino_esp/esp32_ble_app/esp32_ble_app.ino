@@ -105,12 +105,30 @@ void loop() {
         ble.print("SYNC_DONE");
     }
 
-    // 1. Handshake
+    // 1. Handshake & Wait for ID
     else if (data == "fingerprint") {
        Serial.println("Handshake -> Sending 'ok'");
-       delay(3000);
        ble.print("ok");
-       // eth test code ann . eth pole ann send cheyande yellathinum ok send cheytha mathi . 
+       
+       // WAIT FOR ID
+       long startTime = millis();
+       while(!ble.available()) {
+         delay(10);
+         if (millis() - startTime > 10000) break; // 10s timeout
+       }
+       
+       if (ble.available()) {
+         String idStr = ble.readString();
+         int idToEnroll = idStr.toInt();
+         
+         Serial.print("Received ID: ");
+         Serial.println(idToEnroll);
+         
+         // Save to variable (User Request)
+         // int currentEnrollId = idToEnroll; 
+         
+         ble.print("ok");
+       }
     }
     
     // 2. Add Fingerprint
