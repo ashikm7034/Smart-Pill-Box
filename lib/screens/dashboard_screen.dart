@@ -34,6 +34,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       "time": "", // Empty on start
       "date": "", // Empty on start
       "status": "empty",
+      "medicine": "",
     };
   });
 
@@ -54,6 +55,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           "time": "",
           "date": "",
           "status": "empty",
+          "medicine": "",
         },
       );
     }
@@ -177,6 +179,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               "time": item['time']?.toString() ?? "",
               "date": item['date']?.toString() ?? "",
               "status": item['status']?.toString() ?? "empty",
+              "medicine": item['medicine']?.toString() ?? "",
             };
           }
         } else {
@@ -190,6 +193,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 "time": item['time']?.toString() ?? "",
                 "date": item['date']?.toString() ?? "",
                 "status": item['status']?.toString() ?? "empty",
+                "medicine": item['medicine']?.toString() ?? "",
               };
             }
           }
@@ -323,6 +327,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             "time": time,
             "date": date,
             "status": status,
+            "medicine": _slotData[id - 1]['medicine'] ??
+                "", // Preserve medicine if BLE doesn't send it
           };
         }
       });
@@ -427,7 +433,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         "slot": slotIndex.toString(),
         "time": "",
         "date": "",
-        "status": "empty"
+        "status": "empty",
+        "medicine": ""
       };
     }
 
@@ -459,6 +466,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _showEditSlotDialog(
       Map<String, String> data, int currentSlotIndex) async {
     String time = data['time']!;
+    String medicine = data['medicine'] ?? "";
 
     // Default to 'scheduled' since we removed the dropdown
     String status = "scheduled";
@@ -496,7 +504,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Time Picker
+                    // Medicine Name Input
+                    TextFormField(
+                      initialValue: medicine,
+                      decoration: InputDecoration(
+                        labelText: "Medicine Name",
+                        labelStyle: GoogleFonts.poppins(),
+                        prefixIcon: const Icon(Icons.medication),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      onChanged: (val) {
+                        medicine = val;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+
                     // Time Picker
                     Material(
                       color: Colors.transparent,
@@ -600,7 +624,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       "time": time,
                       "date": dateStr,
                       "status": "scheduled",
-                      "medicine": "Medicine Name",
+                      "medicine": medicine,
                     };
                     FirebaseService().updateSlot(
                       int.parse(data['slot']!),
