@@ -127,7 +127,7 @@ void loop() {
          // Save to variable (User Request)
          // int currentEnrollId = idToEnroll; 
          
-         ble.print("ok");
+         ble.print("o   ");
        }
     }
     

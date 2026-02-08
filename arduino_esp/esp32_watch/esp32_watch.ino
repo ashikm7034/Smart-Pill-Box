@@ -13,6 +13,10 @@
 String ssid = "";
 String pass = "";
 
+// Global Variables for Monitoring
+String notifiedMissedSlots = ""; // Remembering which missed slots we already alerted for
+String lastDate = ""; // Storing today's date to know when a new day starts
+
 BLEServer* pServer = NULL;
 BLECharacteristic* pCharacteristic = NULL;
 bool deviceConnected = false;
@@ -160,6 +164,29 @@ void printLocalTime() {
   Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");  // Debug print
 }
 
+// Helper to parse "08:00 AM" or "8:00 AM" into minutes from midnight
+int parseTimeMinutes(String timeStr) {
+  // Format: HH:MM AM/PM
+  int colonIndex = timeStr.indexOf(':');
+  if (colonIndex == -1) return -1;
+  
+  int spaceIndex = timeStr.indexOf(' ', colonIndex);
+  if (spaceIndex == -1) return -1;
+  
+  String hrStr = timeStr.substring(0, colonIndex);
+  String minStr = timeStr.substring(colonIndex + 1, spaceIndex);
+  String ampm = timeStr.substring(spaceIndex + 1);
+  ampm.trim(); // "AM" or "PM"
+
+  int hr = hrStr.toInt();
+  int mn = minStr.toInt();
+  
+  if (ampm == "PM" && hr != 12) hr += 12;
+  if (ampm == "AM" && hr == 12) hr = 0;
+  
+  return (hr * 60) + mn;
+}
+
 void fetchSlotData() {
   if (WiFi.status() == WL_CONNECTED) {
     // 1. Sync Time if needed (first run or periodic)
@@ -186,7 +213,18 @@ void fetchSlotData() {
     currentDate.replace("  ", " ");
     currentDate.trim();
 
+    // Check if the date has changed (New Day)
+    if (currentDate != lastDate) {
+        notifiedMissedSlots = ""; // Clear memory for the new day
+        lastDate = currentDate;   // Update the date tracker
+    }
+
     Serial.print("Current: "); Serial.print(currentTime); Serial.print(" | "); Serial.println(currentDate);
+    // Serial.print("Notified Missed: "); Serial.println(notifiedMissedSlots);
+
+    // Calculate Current Minutes for Grace Period Logic (Kept for reference or removed if unused, but user said remove other things... maybe keep helper but don't use it?)
+    // actually user said remove other things.
+    // int currentMinutes = parseTimeMinutes(currentTime);
 
     // 3. Fetch Data
     HTTPClient http;
@@ -216,7 +254,7 @@ void fetchSlotData() {
           int valEnd = payload.indexOf("\"", valStart);
           String slotTime = payload.substring(valStart, valEnd);
 
-          // Extract Object Context (to find Date & Medicine)
+          // Extract Object Context (to find Date & Medicine & Status)
           int objStart = payload.lastIndexOf("{", timeIndex);
           int objEnd = payload.indexOf("}", timeIndex);
           String objStr = payload.substring(objStart, objEnd);
@@ -239,39 +277,63 @@ void fetchSlotData() {
               slotMedicine = objStr.substring(mStart, mEnd);
           }
 
+          // Extract Status
+          String slotStatus = "";
+          int statusKey = objStr.indexOf("\"status\":");
+          if (statusKey != -1) {
+              int sStart = objStr.indexOf("\"", statusKey + 9) + 1;
+              int sEnd = objStr.indexOf("\"", sStart);
+              slotStatus = objStr.substring(sStart, sEnd);
+          }
+
           Serial.print("Slot: "); Serial.print(slotTime); 
           Serial.print(" | "); Serial.print(slotDate);
           Serial.print(" - "); Serial.print(slotMedicine);
+          Serial.print(" ["); Serial.print(slotStatus); Serial.println("]");
 
-          // CHECK FOR MATCH (Time AND Date)
-          if (slotTime == currentTime && slotDate == currentDate) {
-            alertTriggered = true;
-            alertMedicine = slotMedicine;
-            Serial.println(" [MATCH!]");
-          } else {
-            Serial.println("");
+          // Logic: Simplified Alert Check
+          // Condition: Date Matches Today
+          if (slotDate == currentDate) {
+             
+             // Check if the pill status is "missed" AND if we haven't vibrated for it yet
+             if (slotStatus == "missed") {
+                 
+                 // Check if this time is NOT in our memory list
+                 if (notifiedMissedSlots.indexOf(slotTime) == -1) {
+                     Serial.print(">>> MISSED SLOT DETECTED: "); Serial.print(slotTime);
+                     Serial.println(" - VIBRATING 5 SEC <<<");
+                     
+                     // Vibrate for 5 seconds (5 times On/Off)
+                     for(int i=0; i<5; i++) {
+                        digitalWrite(10, 1); delay(500); // Turn On
+                        digitalWrite(10, 0); delay(500); // Turn Off
+                     }
+                     digitalWrite(10, 0); // Make sure it stays Off
+
+                     // Add this time to our memory so we don't vibrate again for the same slot
+                     notifiedMissedSlots += slotTime + ";";
+                 }
+             }
+
+             // Print match for debugging
+             if (slotTime == currentTime) {
+                Serial.println(" [IT IS TIME!]");
+                alertMedicine = slotMedicine;
+                alertTriggered = true;
+             }
           }
 
           timeIndex = valEnd;  // Continue search
         }
         Serial.println("-------------------------");
 
-        // 5. Trigger Alert
+        // 3. Trigger Simple Initial Alert (Time Match Only) - NO VIBRATION
         if (alertTriggered && currentTime != lastAlertTime) {
              Serial.println("\n*********************************");
              Serial.println("*    TIME TO TAKE MEDICINE!     *");
              Serial.print  ("*    "); Serial.print(alertMedicine); Serial.println("    *");
              Serial.println("*********************************\n");
-             
-             // Blink Sequence (HIGH-LOW-HIGH-LOW-HIGH-LOW) 1s each
-             digitalWrite(10, 1); delay(1000);
-             digitalWrite(10, 0); delay(1000);
-             digitalWrite(10, 1); delay(1000);
-             digitalWrite(10, 0); delay(1000);
-             digitalWrite(10, 1); delay(1000);
-             digitalWrite(10, 0);
-             
-             lastAlertTime = currentTime; // Prevent repeating for this minute
+             lastAlertTime = currentTime; 
         }
 
       } else {
