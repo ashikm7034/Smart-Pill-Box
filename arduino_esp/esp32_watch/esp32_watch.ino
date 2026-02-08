@@ -173,12 +173,20 @@ void fetchSlotData() {
       }
     }
 
-    // 2. Format Current Time to match Firebase: "08:00 AM" -> "%I:%M %p"
+    // 2. Format Current Time: "08:00 AM"
     char timeStr[12];
     strftime(timeStr, sizeof(timeStr), "%I:%M %p", &timeinfo);
     String currentTime = String(timeStr);
+    
+    // 2b. Format Current Date: "Jan 8"
+    char dateStr[12];
+    strftime(dateStr, sizeof(dateStr), "%b %e", &timeinfo);
+    String currentDate = String(dateStr);
+    // Fix "Jan  8" -> "Jan 8"
+    currentDate.replace("  ", " ");
+    currentDate.trim();
 
-    // Serial.print("Current Time: "); Serial.println(currentTime);
+    Serial.print("Current: "); Serial.print(currentTime); Serial.print(" | "); Serial.println(currentDate);
 
     // 3. Fetch Data
     HTTPClient http;
@@ -193,11 +201,6 @@ void fetchSlotData() {
       if (httpResponseCode > 0) {
         String payload = http.getString();
 
-        // 4. Parse JSON (Simple String Manipulation)
-        // Format: "time": "08:00 AM", "medicine": "Medicine Name"
-        // We iterate through the payload string to find all occurrences
-        Serial.println("currentTime");
-        Serial.println(currentTime);
         Serial.println("\n--- MEDICINE SCHEDULE ---");
 
         int timeIndex = 0;
@@ -209,50 +212,41 @@ void fetchSlotData() {
           if (timeIndex == -1) break;
 
           // Extract Time
-          int valStart = payload.indexOf("\"", timeIndex + 7) + 1;  // +7 skips "time":"
+          int valStart = payload.indexOf("\"", timeIndex + 7) + 1;
           int valEnd = payload.indexOf("\"", valStart);
           String slotTime = payload.substring(valStart, valEnd);
 
-          // Extract Medicine (search backwards or forwards locally, usually nearby)
-          // Let's find the closing brace of this object to bound search?
-          // Better: Find "medicine" relative to this time position.
-          // In typical Firebase JSON, keys are unordered, but usually grouped in object.
-          // We'll search for "medicine" closest to this time key.
-          // Since we scan forward, let's find the object bounds.
-          // Simplified: Just find "medicine" key after the current time key?
-          // Dangerous if order varies.
-          // Better Approach: Iterate objects by ID "1", "2" etc? No keys are dynamic.
+          // Extract Object Context (to find Date & Medicine)
+          int objStart = payload.lastIndexOf("{", timeIndex);
+          int objEnd = payload.indexOf("}", timeIndex);
+          String objStr = payload.substring(objStart, objEnd);
 
-          // Robust-ish String Search:
-          // Find "medicine" key.
-          // This is tricky without a parser.
-          // Let's assume standard order or just print formatted string.
+          // Extract Date
+          String slotDate = "";
+          int dateKey = objStr.indexOf("\"date\":");
+          if (dateKey != -1) {
+             int dStart = objStr.indexOf("\"", dateKey + 7) + 1;
+             int dEnd = objStr.indexOf("\"", dStart);
+             slotDate = objStr.substring(dStart, dEnd);
+          }
 
-          // Actually, let's just search for "medicine" value nearby.
-          // Simple approach for "Schedule List":
-          // Print raw found times for now?
-          // User wants "print time to take medicine".
-
-          Serial.print("Slot Time: ");
-          Serial.print(slotTime);
-
-          // CHECK FOR MATCH
-          if (slotTime == currentTime) {
-            alertTriggered = true;
-            // Try to find medicine name for this slot
-            // We'll look for "medicine" BEFORE or AFTER.
-            // Let's grab a chunk of string around the timeIndex to look for medicine.
-            int objStart = payload.lastIndexOf("{", timeIndex);
-            int objEnd = payload.indexOf("}", timeIndex);
-            String objStr = payload.substring(objStart, objEnd);
-
-            int medKey = objStr.indexOf("\"medicine\":");
-            if (medKey != -1) {
+          // Extract Medicine
+          String slotMedicine = "Medicine";
+          int medKey = objStr.indexOf("\"medicine\":");
+          if (medKey != -1) {
               int mStart = objStr.indexOf("\"", medKey + 11) + 1;
               int mEnd = objStr.indexOf("\"", mStart);
-              alertMedicine = objStr.substring(mStart, mEnd);
-              Serial.print(" - " + alertMedicine);
-            }
+              slotMedicine = objStr.substring(mStart, mEnd);
+          }
+
+          Serial.print("Slot: "); Serial.print(slotTime); 
+          Serial.print(" | "); Serial.print(slotDate);
+          Serial.print(" - "); Serial.print(slotMedicine);
+
+          // CHECK FOR MATCH (Time AND Date)
+          if (slotTime == currentTime && slotDate == currentDate) {
+            alertTriggered = true;
+            alertMedicine = slotMedicine;
             Serial.println(" [MATCH!]");
           } else {
             Serial.println("");
@@ -290,7 +284,28 @@ void fetchSlotData() {
     }
   }
 }
-void fetchSensorData() {
+
+void resetAlert() {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    WiFiClientSecure client;
+    client.setInsecure();
+    String url = "https://smart-pill-box-by-techiedo-default-rtdb.firebaseio.com/sensor/alert.json";
+
+    if (http.begin(client, url)) {
+      int httpResponseCode = http.PUT("\"0\""); // Set alert to "0"
+      if (httpResponseCode > 0) {
+        Serial.print("Alert Reset Success: "); Serial.println(httpResponseCode);
+      } else {
+        Serial.print("Alert Reset Failed: "); Serial.println(httpResponseCode);
+      }
+      http.end();
+    }
+  }
+}
+
+bool fetchSensorData() {
+  bool alertDetected = false;
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
     WiFiClientSecure client;
@@ -303,53 +318,66 @@ void fetchSensorData() {
 
       if (httpResponseCode > 0) {
         String payload = http.getString();
-        // Serial.println("Sensor Payload: " + payload);
-
+        
         // Parse avg_bpm
-        // Payload format: {"avg_bpm": 120, "bpm": ...}
         int keyIndex = payload.indexOf("\"avg_bpm\":");
+        int avgBpm = 0;
         if (keyIndex != -1) {
-          int valStart = payload.indexOf(":", keyIndex) + 1;
-          int valEnd = payload.indexOf(",", valStart);
-          if (valEnd == -1) valEnd = payload.indexOf("}", valStart);  // Handle last item case
+           int valStart = payload.indexOf(":", keyIndex) + 1;
+           int valEnd = payload.indexOf(",", valStart);
+           if (valEnd == -1) valEnd = payload.indexOf("}", valStart);
+           String bpmStr = payload.substring(valStart, valEnd);
+           avgBpm = bpmStr.toInt();
+           Serial.print("Avg BPM: ");
+           Serial.println(avgBpm);
+        }
 
-          String bpmStr = payload.substring(valStart, valEnd);
-          int avgBpm = bpmStr.toInt();
+        // Parse 'alert'
+        int alertStart = payload.indexOf("\"alert\":");
+        String alertVal = "0";
 
-          Serial.print("Avg BPM: ");
-          Serial.println(avgBpm);
+        if (alertStart != -1) {
+           int valStart = payload.indexOf(":", alertStart);
+           if (valStart != -1) {
+              valStart++; 
+              while(payload[valStart] == ' ' && valStart < payload.length()) valStart++;
+              if (payload[valStart] == '"') {
+                 valStart++; 
+                 int valEnd = payload.indexOf("\"", valStart);
+                 alertVal = payload.substring(valStart, valEnd);
+              } else {
+                 int valEnd = payload.indexOf(",", valStart);
+                 if (valEnd == -1) valEnd = payload.indexOf("}", valStart);
+                 alertVal = payload.substring(valStart, valEnd);
+                 alertVal.trim();
+              }
+           }
+          
+          Serial.print("Alert Value: ");
+          Serial.println(alertVal);
 
-          // CHECK ABNORMALITY
-          // Normal Range: 60-100?
-          // Alert if < 50 or > 100 (excluding 0)
-          if (avgBpm > 0 && (avgBpm < 50 || avgBpm > 100)) {
-            Serial.println("\n*********************************");
-            Serial.println("*    HEART RATE ALERT! 💓       *");
-            Serial.print("*    BPM: ");
-            Serial.print(avgBpm);
-            Serial.println(" (Abnormal)      *");
-            Serial.println("*********************************\n");
-            digitalWrite(10, 1);
-            delay(1000);  // Alert Duration
-            digitalWrite(10, 0);
-            delay(1000);
-            digitalWrite(10, 1);
-            delay(1000);  // Alert Duration
-            digitalWrite(10, 0);
-            delay(1000);
-            digitalWrite(10, 1);
-            delay(1000);  // Alert Duration
-            digitalWrite(10, 0);
-              
+          if (alertVal == "1") {
+             alertDetected = true;
           }
         }
+        
+        // CHECK ABNORMALITY (BPM > 100 or < 50)
+        // We handle immediate feedback here (Blink) but not the full reset/main alert loop
+        if (avgBpm > 0 && (avgBpm < 50 || avgBpm > 100)) {
+           // Short Blink for BPM Warning
+            digitalWrite(10, 1);
+            delay(200);
+            digitalWrite(10, 0);
+        }
+
       } else {
         Serial.print("Sensor HTTP Error: ");
         Serial.println(httpResponseCode);
       }
-      http.end();
+      http.end(); // Close connection
     }
   }
+  return alertDetected;
 }
 
 
@@ -409,7 +437,22 @@ void loop() {
     if (currentMillis - lastFetchTime >= FETCH_INTERVAL) {
       lastFetchTime = currentMillis;
       fetchSlotData();
-      fetchSensorData();  // Also fetch sensor data
+      
+      bool alertActive = fetchSensorData();  // Check for Alert Status
+      if (alertActive) {
+           Serial.println(">>> TRIGGERING VIBRATION PATTERN <<<");
+           
+           // Vibration Pattern
+           digitalWrite(10, 1); delay(500);
+           digitalWrite(10, 0); delay(200);
+           digitalWrite(10, 1); delay(500);
+           digitalWrite(10, 0); delay(200);
+           digitalWrite(10, 1); delay(500);
+           digitalWrite(10, 0); 
+           
+           // Reset Alert in Firebase (Safe to call now)
+           resetAlert();
+      }
     }
   }
 

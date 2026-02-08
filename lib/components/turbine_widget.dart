@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 class TurbineController {
   _TurbineWidgetState? _state;
@@ -40,6 +41,7 @@ class _TurbineWidgetState extends State<TurbineWidget>
   int _lastFeedbackIndex = -1;
   late AnimationController _animController;
   late Animation<double> _animation;
+  final AudioPlayer _audioPlayer = AudioPlayer();
 
   @override
   void initState() {
@@ -179,10 +181,15 @@ class _TurbineWidgetState extends State<TurbineWidget>
                   setState(() {
                     _rotationAngle += (angle - prevAngle);
 
-                    // Haptic Feedback Logic
+                    // Haptic & Sound Feedback Logic
                     int newIndex = _calculateActiveIndex();
                     if (newIndex != _lastFeedbackIndex) {
                       HapticFeedback.mediumImpact();
+                      // Play Click Sound Rapidly
+                      _audioPlayer.stop();
+                      _audioPlayer.play(AssetSource('sounds/click.mp3'),
+                          mode: PlayerMode.lowLatency);
+
                       _lastFeedbackIndex = newIndex;
                     }
                   });
@@ -512,9 +519,9 @@ class TurbinePainter extends CustomPainter {
       if (slotData.isNotEmpty) {
         String status = slotData['status']?.toLowerCase() ?? "empty";
         if (status == 'taken') {
-          // Success: Teal -> Lime
-          colorStart = const Color(0xFF00B09B);
-          colorEnd = const Color(0xFF96C93D);
+          // Success/Done: Metallic Gray (History)
+          colorStart = const Color(0xFF757F9A);
+          colorEnd = const Color(0xFFD7DDE8);
         } else if (status == 'missed') {
           // Alert: Coral -> Orange
           colorStart = const Color(0xFFFF5F6D);
@@ -523,8 +530,12 @@ class TurbinePainter extends CustomPainter {
           // Future: Cyan -> Royal Blue
           colorStart = const Color(0xFF36D1DC);
           colorEnd = const Color(0xFF5B86E5);
+        } else if (status == 'timeup') {
+          // Time Up: Green (Actionable)
+          colorStart = const Color(0xFF00B09B);
+          colorEnd = const Color(0xFF96C93D);
         } else {
-          // Empty: Gray as requested
+          // Empty: Light Gray
           colorStart = Colors.grey[300]!;
           colorEnd = Colors.grey[400]!;
         }

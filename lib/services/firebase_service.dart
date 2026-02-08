@@ -20,9 +20,9 @@ class FirebaseService {
     return _db.child('pill_slots').onValue;
   }
 
-  /// Listen to heart rate updates
-  Stream<DatabaseEvent> get heartRateStream {
-    return _db.child('heart_rate').onValue;
+  /// Listen to sensor updates (BPM, Alert)
+  Stream<DatabaseEvent> get sensorStream {
+    return _db.child('sensor').onValue;
   }
 
   // --- WRITES (App -> Cloud) ---

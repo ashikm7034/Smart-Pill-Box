@@ -34,7 +34,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       "time": "", // Empty on start
       "date": "", // Empty on start
       "status": "empty",
-      "medicine": "",
     };
   });
 
@@ -55,7 +54,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           "time": "",
           "date": "",
           "status": "empty",
-          "medicine": "",
         },
       );
     }
@@ -76,6 +74,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     // Auto-connect timer
     _timer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      // 1. Update Clock
+      if (mounted) {
+        setState(() {
+          _now = DateTime.now();
+        });
+      }
+
+      // 2. Check for "Time Up"
+      String currentTimeStr = _formatTime(_now); // e.g. "08:00 AM"
+      bool statusChanged = false;
+
+      for (int i = 0; i < _slotData.length; i++) {
+        var slot = _slotData[i];
+        if (slot['time'] == currentTimeStr && slot['status'] == 'scheduled') {
+          // TIME MATCH!
+          _slotData[i]['status'] = 'timeup';
+          statusChanged = true;
+
+          // Optional: Trigger local notification here if needed
+        }
+      }
+
+      if (statusChanged && mounted) {
+        setState(() {}); // Refresh UI
+      }
+
+      // 3. Auto-Connect Check
       if (!_isConnected && !FlutterBluePlus.isScanningNow) {
         _checkAutoConnect();
       }
@@ -163,37 +188,49 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // 1. Listen to Slots
     FirebaseService().slotsStream.listen((DatabaseEvent event) {
       if (event.snapshot.value != null) {
-        final data = event.snapshot.value as Map<dynamic, dynamic>;
+        final data = event.snapshot.value;
+        print("🔥 FIREBASE DATA: $data");
 
         // Create a copy of current fixed list
         List<Map<String, String>> updatedSlots = List.from(_slotData);
 
         if (data is List) {
-          for (var i = 0; i < data.length && i < 15; i++) {
+          // Firebase returns List if keys are mostly numeric (e.g. "1", "2"..)
+          // It usually starts at index 0 (null) if first key is "1".
+          for (var i = 0; i < data.length; i++) {
             if (data[i] == null) continue;
             var item = Map<String, dynamic>.from(data[i]);
-            // Lists are usually 0-indexed, but our slots are 1-15.
-            // Assuming data[i] corresponds to slot i+1
-            updatedSlots[i] = {
-              "slot": "${i + 1}",
-              "time": item['time']?.toString() ?? "",
-              "date": item['date']?.toString() ?? "",
-              "status": item['status']?.toString() ?? "empty",
-              "medicine": item['medicine']?.toString() ?? "",
-            };
+
+            // Try to find slot ID from data itself, or assume index
+            String slotStr = item['slot']?.toString() ?? i.toString();
+            int slotId = int.tryParse(slotStr) ?? i;
+
+            // Adjust to 0-based array index (0-14 for Slots 1-15)
+            // If slotId is 1, array index is 0.
+            int arrayIndex = slotId - 1;
+
+            if (arrayIndex >= 0 && arrayIndex < 15) {
+              updatedSlots[arrayIndex] = {
+                "slot": slotId.toString(),
+                "time": item['time']?.toString() ?? "",
+                "date": item['date']?.toString() ?? "",
+                "status": item['status']?.toString() ?? "empty",
+              };
+            }
           }
-        } else {
-          // Map: Loop through 1 to 15
+        } else if (data is Map) {
+          final dataMap = Map<String, dynamic>.from(data as Map);
+          print("🔥 Parsing as MAP");
+          // Map: Loop through 1 to 15 keys
           for (int i = 1; i <= 15; i++) {
             var key = i.toString();
-            if (data.containsKey(key)) {
-              var item = Map<String, dynamic>.from(data[key]);
+            if (dataMap.containsKey(key)) {
+              var item = Map<String, dynamic>.from(dataMap[key]);
               updatedSlots[i - 1] = {
                 "slot": key,
                 "time": item['time']?.toString() ?? "",
                 "date": item['date']?.toString() ?? "",
                 "status": item['status']?.toString() ?? "empty",
-                "medicine": item['medicine']?.toString() ?? "",
               };
             }
           }
@@ -214,13 +251,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
 
     // 2. Listen to Heart Rate
-    FirebaseService().heartRateStream.listen((event) {
+    // 2. Listen to Sensor Data (BPM & Alerts)
+    FirebaseService().sensorStream.listen((event) {
       if (event.snapshot.value != null) {
-        final data = event.snapshot.value as Map<dynamic, dynamic>;
+        int bpm = 0;
+        String alertStatus = "0";
+
+        final val = event.snapshot.value;
+        if (val is Map) {
+          // Parse avg_bpm (can be int or double)
+          var avg = val['avg_bpm'];
+          if (avg is int)
+            bpm = avg;
+          else if (avg is double)
+            bpm = avg.toInt();
+          else if (avg is String) bpm = int.tryParse(avg) ?? 0;
+
+          // Parse alert
+          alertStatus = val['alert']?.toString() ?? "0";
+        }
+
         if (mounted) {
           setState(() {
-            _heartRate = data['bpm'] ?? 0;
+            _heartRate = bpm;
           });
+
+          // Alert Logic
+          bool hasAlert = (alertStatus != "0");
+
+          // Trigger if Alert flag is set OR BPM is abnormal (but > 0)
+          if (hasAlert || bpm > 100 || (bpm < 50 && bpm > 0)) {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.warning, color: Colors.white),
+                  const SizedBox(width: 10),
+                  Text("HR Alert! BPM: $bpm (Status: $alertStatus)"),
+                ],
+              ),
+              duration: const Duration(seconds: 4),
+              backgroundColor: bpm > 100 ? Colors.redAccent : Colors.orange,
+              behavior: SnackBarBehavior.floating,
+            ));
+          }
         }
       }
     });
@@ -241,6 +315,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         });
       await _startBLEListening(FlutterBluePlus.connectedDevices.first);
       await _requestDataFromESP();
+      await _checkWiFiAndSync(
+          FlutterBluePlus.connectedDevices.first); // Sync WiFi
       return;
     }
 
@@ -266,6 +342,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 print("Auto-connected!");
                 await _startBLEListening(r.device);
                 await _requestDataFromESP();
+                await _checkWiFiAndSync(r.device); // Sync WiFi
               } catch (e) {
                 print("Auto-connect failed: $e");
               }
@@ -327,8 +404,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             "time": time,
             "date": date,
             "status": status,
-            "medicine": _slotData[id - 1]['medicine'] ??
-                "", // Preserve medicine if BLE doesn't send it
           };
         }
       });
@@ -433,8 +508,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         "slot": slotIndex.toString(),
         "time": "",
         "date": "",
-        "status": "empty",
-        "medicine": ""
+        "status": "empty"
       };
     }
 
@@ -466,7 +540,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _showEditSlotDialog(
       Map<String, String> data, int currentSlotIndex) async {
     String time = data['time']!;
-    String medicine = data['medicine'] ?? "";
 
     // Default to 'scheduled' since we removed the dropdown
     String status = "scheduled";
@@ -504,23 +577,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Medicine Name Input
-                    TextFormField(
-                      initialValue: medicine,
-                      decoration: InputDecoration(
-                        labelText: "Medicine Name",
-                        labelStyle: GoogleFonts.poppins(),
-                        prefixIcon: const Icon(Icons.medication),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      onChanged: (val) {
-                        medicine = val;
-                      },
-                    ),
-                    const SizedBox(height: 16),
-
+                    // Time Picker
                     // Time Picker
                     Material(
                       color: Colors.transparent,
@@ -624,7 +681,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       "time": time,
                       "date": dateStr,
                       "status": "scheduled",
-                      "medicine": medicine,
+                      "medicine": "Medicine Name",
                     };
                     FirebaseService().updateSlot(
                       int.parse(data['slot']!),
@@ -878,9 +935,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  _buildLegendItem("Taken", const Color(0xFF66BB6A)),
+                  _buildLegendItem("Taken", const Color(0xFF757F9A)), // Gray
                   const SizedBox(width: 8),
                   _buildLegendItem("Scheduled", const Color(0xFF42A5F5)),
+                  const SizedBox(width: 8),
+                  _buildLegendItem("Time Up", const Color(0xFF00B09B)), // Green
                   const SizedBox(width: 8),
                   _buildLegendItem("Missed", const Color(0xFFEF5350)),
                 ],
@@ -991,6 +1050,157 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
       ),
     );
+  }
+
+  // --- WIFI SYNC LOGIC ---
+
+  Future<void> _checkWiFiAndSync(BluetoothDevice device) async {
+    final prefs = await SharedPreferences.getInstance();
+    String? ssid = prefs.getString('wifi_ssid');
+    String? pass = prefs.getString('wifi_pass');
+
+    if (ssid != null && ssid.isNotEmpty && pass != null && pass.isNotEmpty) {
+      // 1. Found cached WiFi -> Send it silently
+      print("Found Cached WiFi ($ssid). Sending to device...");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Syncing WiFi: $ssid...")),
+        );
+      }
+      await _sendWiFiToDevice(device, ssid, pass);
+    } else {
+      // 2. No WiFi cached -> Prompt User (First Connect)
+      if (mounted) {
+        _showWiFiPrompt(device);
+      }
+    }
+  }
+
+  Future<void> _showWiFiPrompt(BluetoothDevice device) async {
+    final TextEditingController ssidController = TextEditingController();
+    final TextEditingController passController = TextEditingController();
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: Text("Setup WiFi Connection",
+              style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  "To sync schedule data, the Pill Box needs WiFi access.",
+                  style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 15),
+                TextField(
+                  controller: ssidController,
+                  decoration: InputDecoration(
+                    labelText: "WiFi Name (SSID)",
+                    labelStyle: GoogleFonts.poppins(),
+                    prefixIcon: const Icon(Icons.wifi),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: passController,
+                  decoration: InputDecoration(
+                    labelText: "WiFi Password",
+                    labelStyle: GoogleFonts.poppins(),
+                    prefixIcon: const Icon(Icons.lock),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                  obscureText: true,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context); // Skip for now
+              },
+              child:
+                  Text("Skip", style: GoogleFonts.poppins(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                String ssid = ssidController.text.trim();
+                String pass = passController.text.trim();
+
+                if (ssid.isNotEmpty && pass.isNotEmpty) {
+                  Navigator.pop(context);
+
+                  // Save to Prefs
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setString('wifi_ssid', ssid);
+                  await prefs.setString('wifi_pass', pass);
+
+                  // Send
+                  await _sendWiFiToDevice(device, ssid, pass);
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF002F6C),
+                foregroundColor: Colors.white,
+              ),
+              child: Text("Save & Connect", style: GoogleFonts.poppins()),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _sendWiFiToDevice(
+      BluetoothDevice device, String ssid, String pass) async {
+    try {
+      // Targeted UUIDs from esp32_watch.ino
+      const String SERVICE_UUID = "12345678-1234-1234-1234-1234567890ab";
+      const String CHAR_UUID = "abcdef01-1234-5678-1234-567890abcdef";
+
+      List<BluetoothService> services = await device.discoverServices();
+      bool sent = false;
+
+      for (var service in services) {
+        if (service.uuid.toString() == SERVICE_UUID) {
+          for (var characteristic in service.characteristics) {
+            if (characteristic.uuid.toString() == CHAR_UUID) {
+              print("Sending WiFi Config via Specific Char...");
+              String cmd = "WIFI:$ssid:$pass";
+              await characteristic.write(cmd.codeUnits);
+              sent = true;
+              break;
+            }
+          }
+        }
+        if (sent) break;
+      }
+
+      // Fallback
+      if (!sent) {
+        print("Specific Service not found, trying fallback write...");
+        await _sendCommand(
+            "WIFI:$ssid:$pass"); // Uses the generic command sender
+        sent = true;
+      }
+
+      if (sent) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("WiFi Credentials Sent!")),
+          );
+        }
+      }
+    } catch (e) {
+      print("Error sending WiFi: $e");
+    }
   }
 }
 
